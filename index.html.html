@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+<meta charset="UTF-8">
+<meta name="viewport"
+content="width=device-width, initial-scale=1, maximum-scale=1">
+
+<title>BLE RADAR PRO</title>
+
+<style>
+
+:root {
+  --bg: #050805;
+  --grid: #0a1a0a;
+  --green: #00ff41;
+  --muted: #66aa66;
+  --red: #ff3344;
+  --panel: rgba(0,20,0,0.9);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: #e0ffe0;
+  font-family: 'Courier New', monospace;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+
+  background-image:
+    linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+
+  background-size: 20px 20px;
+}
+
+.header {
+  height: 55px;
+  padding: 0 15px;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+
+  border-bottom: 1px solid var(--grid);
+}
+
+.header h1 {
+  color: var(--green);
+  font-size: 16px;
+  text-shadow: 0 0 8px var(--green);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--red);
+}
+
+.dot.on {
+  background: var(--green);
+  box-shadow: 0 0 10px var(--green);
+}
+
+#warning-banner {
+  display: none;
+  padding: 10px;
+  background: var(--red);
+  color: white;
+  font-size: 12px;
+  text-align: center;
+}
+
+.radar-container {
+  flex: 1;
+  min-height: 0;
+
+  position: relative;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  overflow: hidden;
+}
+
+#radarCanvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.data-panel {
+  position: absolute;
+  top: 12px;
+  right: 10px;
+
+  width: 125px;
+  padding: 10px;
+
+  background: var(--panel);
+
+  border: 1px solid var(--grid);
+  border-left: 3px solid var(--green);
+
+  z-index: 5;
+}
+
+.data-panel .title {
+  font-size: 10px;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.data-panel .value {
+  font-size: 17px;
+  color: var(--green);
+  margin-bottom: 9px;
+  font-weight: bold;
+}
+
+.controls {
+  padding: 12px;
+
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.btn {
+  padding: 14px 8px;
+
+  border: 1px solid var(--green);
+  border-radius: 5px;
+
+  background: rgba(0,255,65,0.08);
+
+  color: var(--green);
+
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: bold;
+
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.btn.danger {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+#debug-log {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+
+  width: 200px;
+  max-height: 85px;
+  overflow: hidden;
+
+  padding: 7px;
+
+  font-size: 10px;
+  color: var(--green);
+
+  background: rgba(0,0,0,0.85);
+
+  border: 1px solid #333;
+
+  pointer-events: none;
+}
+
+</style>
+</head>
+
+<body>
+
+<div id="warning-banner">
+  BLE ADVERTISEMENT SCANNING NOT SUPPORTED.
+  Try a supported Chrome version and Android device.
+</div>
+
+<div class="header">
+
+  <h1>BLE RADAR PRO</h1>
+
+  <div class="status">
+
+    <span id="status-text">OFFLINE</span>
+
+    <div id="conn-dot" class="dot"></div>
+
+  </div>
+
+</div>
+
+<div class="radar-container">
+
+  <canvas id="radarCanvas"></canvas>
+
+  <div class="data-panel">
+
+    <div class="title">RAW RSSI</div>
+    <div class="value" id="ui-raw">--</div>
+
+    <div class="title">FILTERED RSSI</div>
+    <div class="value" id="ui-rssi">--</div>
+
+    <div class="title">ESTIMATED DISTANCE</div>
+    <div class="value" id="ui-dist">--</div>
+
+    <div class="title">TAG STATUS</div>
+    <div class="value" id="ui-tag-status">WAITING</div>
+
+  </div>
+
+  <div id="debug-log">System ready.</div>
+
+</div>
+
+<div class="controls">
+
+  <button id="btn-connect" class="btn">
+    CONNECT
+  </button>
+
+  <button id="btn-scan" class="btn" disabled>
+    START SCAN
+  </button>
+
+  <button id="btn-beep" class="btn" disabled>
+    MANUAL BEEP
+  </button>
+
+  <button id="btn-find" class="btn danger" disabled>
+    FIND TAG
+  </button>
+
+</div>
+
+<script>
+
+// ==================================================
+// CONFIGURATION
+// ==================================================
+
+const CONTROL_SERVICE_UUID =
+  "0000fff0-0000-1000-8000-00805f9b34fb";
+
+const CONTROL_CHAR_UUID =
+  "0000fff1-0000-1000-8000-00805f9b34fb";
+
+const NAME_PREFIX = "MY-JIO-TAG";
+
+// Reference RSSI at 1 metre.
+// Calibrate this value using your actual tag.
+
+const TX_POWER = -59;
+
+const PATH_LOSS = 2.5;
+
+// ==================================================
+// GLOBAL STATE
+// ==================================================
+
+const state = {
+
+  device: null,
+
+  server: null,
+
+  controlChar: null,
+
+  leScan: null,
+
+  finding: false,
+
+  scanning: false,
+
+  lastSendTime: 0,
+
+  lastAdvAt: 0,
+
+  lostHandled: false,
+
+  lastMode: -1
+
+};
+
+let audioCtx = null;
+
+let beepTimer = null;
+
+let rssiHistory = [];
+
+let smoothedRssi = -99;
+
+let targetRadius = 1;
+
+let currentRadius = 1;
+
+const targetAngle = Math.PI / 4;
+
+// ==================================================
+// DOM HELPERS
+// ==================================================
+
+const $ = selector =>
+  document.querySelector(selector);
+
+// ==================================================
+// LOGGING
+// ==================================================
+
+function log(message) {
+
+  const element = $("#debug-log");
+
+  const lines = element.innerHTML.split("<br>");
+
+  element.innerHTML =
+    message + "<br>" +
+    lines.slice(0, 4).join("<br>");
+
+}
+
+// ==================================================
+// AUDIO FEEDBACK
+// ==================================================
+
+function ensureAudio() {
+
+  if (!audioCtx) {
+
+    audioCtx = new (
+      window.AudioContext ||
+      window.webkitAudioContext
+    )();
+
+  }
+
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+
+  return audioCtx;
+}
+
+function playBeep(pct) {
+
+  try {
+
+    const ctx = ensureAudio();
+
+    const frequency = 440 + pct * 8;
+
+    const gain = 0.06 + (pct / 100) * 0.28;
+
+    const duration =
+      (80 + (pct / 100) * 220) / 1000;
+
+    const oscillator = ctx.createOscillator();
+
+    const volume = ctx.createGain();
+
+    oscillator.type = "sine";
+
+    oscillator.frequency.value = frequency;
+
+    volume.gain.setValueAtTime(
+      0.0001,
+      ctx.currentTime
+    );
+
+    volume.gain.exponentialRampToValueAtTime(
+      gain,
+      ctx.currentTime + 0.012
+    );
+
+    volume.gain.exponentialRampToValueAtTime(
+      0.0001,
+      ctx.currentTime + duration
+    );
+
+    oscillator.connect(volume);
+
+    volume.connect(ctx.destination);
+
+    oscillator.start();
+
+    oscillator.stop(
+      ctx.currentTime + duration + 0.02
+    );
+
+  } catch (error) {
+
+    console.log("Audio error:", error);
+
+  }
+
+}
+
+// ==================================================
+// PHONE SIDE PROXIMITY BEEP
+// ==================================================
+
+function startBeeping() {
+
+  stopBeeping();
+
+  function tick() {
+
+    if (!state.finding) return;
+
+    if (smoothedRssi === -99) {
+
+      beepTimer = setTimeout(tick, 500);
+
+      return;
+
+    }
+
+    const pct = Math.max(
+      0,
+      Math.min(
+        100,
+        ((smoothedRssi + 100) / 60) * 100
+      )
+    );
+
+    if (pct > 0) {
+
+      playBeep(pct);
+
+      if (navigator.vibrate) {
+        navigator.vibrate(20);
+      }
+
+    }
+
+    const nextInterval = Math.max(
+      200,
+      1200 - pct * 10
+    );
+
+    beepTimer = setTimeout(
+      tick,
+      nextInterval
+    );
+
+  }
+
+  tick();
+
+}
+
+function stopBeeping() {
+
+  if (beepTimer) {
+
+    clearTimeout(beepTimer);
+
+    beepTimer = null;
+
+  }
+
+}
+
+// ==================================================
+// GATT WRITE HELPER
+// ==================================================
+
+async function sendCommand(command) {
+
+  if (!state.controlChar) return false;
+
+  try {
+
+    const data = new TextEncoder().encode(command);
+
+    await state.controlChar.writeValue(data);
+
+    return true;
+
+  } catch (error) {
+
+    log("Command error");
+
+    return false;
+
+  }
+
+}
+
+// ==================================================
+// CONNECT BLE DEVICE
+// ==================================================
+
+async function connect() {
+
+  try {
+
+    if (!navigator.bluetooth) {
+
+      log("Web Bluetooth unavailable");
+
+      return;
+
+    }
+
+    log("Requesting tag...");
+
+    const device =
+      await navigator.bluetooth.requestDevice({
+
+        filters: [
+          {
+            namePrefix: NAME_PREFIX
+          }
+        ],
+
+        optionalServices: [
+          CONTROL_SERVICE_UUID
+        ]
+
+      });
+
+    state.device = device;
+
+    device.addEventListener(
+      "gattserverdisconnected",
+      onDisconnected
+    );
+
+    log("Connecting GATT...");
+
+    state.server = await device.gatt.connect();
+
+    const service =
+      await state.server.getPrimaryService(
+        CONTROL_SERVICE_UUID
+      );
+
+    state.controlChar =
+      await service.getCharacteristic(
+        CONTROL_CHAR_UUID
+      );
+
+    $("#conn-dot").classList.add("on");
+
+    $("#status-text").textContent = "CONNECTED";
+
+    $("#btn-connect").textContent = "RECONNECT";
+
+    $("#btn-scan").disabled = false;
+
+    $("#btn-beep").disabled = false;
+
+    $("#btn-find").disabled = false;
+
+    log("GATT connected");
+
+  } catch (error) {
+
+    log("Connect error: " + error.message);
+
+  }
+
+}
+
+// ==================================================
+// DISCONNECT HANDLING
+// ==================================================
+
+function onDisconnected() {
+
+  log("Tag disconnected");
+
+  state.finding = false;
+
+  state.scanning = false;
+
+  stopBeeping();
+
+  if (state.leScan) {
+
+    state.leScan.stop();
+
+    state.leScan = null;
+
+  }
+
+  $("#conn-dot").classList.remove("on");
+
+  $("#status-text").textContent = "OFFLINE";
+
+  $("#btn-scan").disabled = true;
+
+  $("#btn-beep").disabled = true;
+
+  $("#btn-find").disabled = true;
+
+  $("#btn-find").textContent = "FIND TAG";
+
+  $("#btn-scan").textContent = "START SCAN";
+
+  $("#ui-tag-status").textContent = "OFFLINE";
+
+}
+
+// ==================================================
+// START LIVE RSSI SCANNING
+// ==================================================
+
+async function startLEScan() {
+
+  if (!navigator.bluetooth?.requestLEScan) {
+
+    $("#warning-banner").style.display = "block";
+
+    log("LE scanning unsupported");
+
+    return;
+
+  }
+
+  if (state.scanning) return;
+
+  try {
+
+    log("Requesting RSSI scan...");
+
+    state.leScan =
+      await navigator.bluetooth.requestLEScan({
+
+        filters: [
+          {
+            namePrefix: NAME_PREFIX
+          }
+        ],
+
+        keepRepeatedDevices: true
+
+      });
+
+    navigator.bluetooth.addEventListener(
+      "advertisementreceived",
+      onAdvertisement
+    );
+
+    state.scanning = true;
+
+    state.lastAdvAt = Date.now();
+
+    state.lostHandled = false;
+
+    $("#btn-scan").textContent = "STOP SCAN";
+
+    log("RSSI scanning active");
+
+  } catch (error) {
+
+    log("Scan error: " + error.message);
+
+  }
+
+}
+
+function stopLEScan() {
+
+  if (state.leScan) {
+
+    state.leScan.stop();
+
+    state.leScan = null;
+
+  }
+
+  state.scanning = false;
+
+  state.finding = false;
+
+  stopBeeping();
+
+  sendCommand("STOP");
+
+  $("#btn-scan").textContent = "START SCAN";
+
+  $("#ui-tag-status").textContent = "SCAN STOPPED";
+
+  log("Scanning stopped");
+
+}
+
+// ==================================================
+// SCAN BUTTON
+// ==================================================
+
+async function toggleScan() {
+
+  if (state.scanning) {
+
+    stopLEScan();
+
+  } else {
+
+    await startLEScan();
+
+  }
+
+}
+
+// ==================================================
+// RSSI ADVERTISEMENT HANDLER
+// ==================================================
+
+function onAdvertisement(event) {
+
+  if (!state.scanning) return;
+
+  const deviceName = event.device?.name || "";
+
+  if (!deviceName.startsWith(NAME_PREFIX)) return;
+
+  const rawRSSI = event.rssi;
+
+  if (!Number.isFinite(rawRSSI)) return;
+
+  state.lastAdvAt = Date.now();
+
+  state.lostHandled = false;
+
+  $("#ui-tag-status").textContent = "DETECTED";
+
+  $("#ui-raw").textContent =
+    rawRSSI + " dBm";
+
+  // Keep last 5 samples
+
+  rssiHistory.push(rawRSSI);
+
+  if (rssiHistory.length > 5) {
+
+    rssiHistory.shift();
+
+  }
+
+  // Median filter
+
+  const sorted = [...rssiHistory].sort(
+    (a, b) => a - b
+  );
+
+  const median =
+    sorted[Math.floor(sorted.length / 2)];
+
+  // Exponential moving average
+
+  if (smoothedRssi === -99) {
+
+    smoothedRssi = median;
+
+  } else {
+
+    smoothedRssi =
+      0.4 * median +
+      0.6 * smoothedRssi;
+
+  }
+
+  updateRadarData(smoothedRssi);
+
+  if (state.finding) {
+
+    syncBeepMode(smoothedRssi);
+
+  }
+
+}
+
+// ==================================================
+// RSSI TIMEOUT / LOST TAG DETECTION
+// ==================================================
+
+function checkTagTimeout() {
+
+  if (!state.scanning || !state.lastAdvAt) return;
+
+  if (Date.now() - state.lastAdvAt > 3000) {
+
+    if (!state.lostHandled) {
+
+      state.lostHandled = true;
+
+      smoothedRssi = -99;
+
+      rssiHistory = [];
+
+      targetRadius = 1;
+
+      $("#ui-raw").textContent = "--";
+
+      $("#ui-rssi").textContent = "--";
+
+      $("#ui-dist").textContent = "--";
+
+      $("#ui-tag-status").textContent = "OUT OF RANGE";
+
+      log("Tag signal lost");
+
+      if (state.finding) {
+
+        sendCommand("STOP");
+
+        stopBeeping();
+
+      }
+
+    }
+
+  }
+
+}
+
+// ==================================================
+// FIND BUTTON
+// ==================================================
+
+async function toggleFind() {
+
+  if (state.finding) {
+
+    state.finding = false;
+
+    $("#btn-find").textContent = "FIND TAG";
+
+    stopBeeping();
+
+    await sendCommand("STOP");
+
+    log("Find stopped");
+
+  } else {
+
+    if (!state.scanning) {
+
+      log("Start RSSI scan first");
+
+      return;
+
+    }
+
+    state.finding = true;
+
+    $("#btn-find").textContent = "STOP FINDING";
+
+    startBeeping();
+
+    log("Find mode active");
+
+  }
+
+}
+
+// ==================================================
+// MANUAL BUZZER
+// ==================================================
+
+async function manualBeep() {
+
+  const success = await sendCommand("BEEP");
+
+  if (success) {
+
+    log("Manual beep sent");
+
+  }
+
+}
+
+// ==================================================
+// AUTOMATIC BUZZER MODE
+// ==================================================
+
+async function syncBeepMode(rssi) {
+
+  if (!state.controlChar) return;
+
+  if (Date.now() - state.lastSendTime < 1000) {
+    return;
+  }
+
+  let mode;
+
+  if (rssi > -50) {
+
+    mode = 5;
+
+  } else if (rssi > -60) {
+
+    mode = 4;
+
+  } else if (rssi > -70) {
+
+    mode = 3;
+
+  } else if (rssi > -80) {
+
+    mode = 2;
+
+  } else {
+
+    mode = 1;
+
+  }
+
+  if (mode === state.lastMode) return;
+
+  state.lastSendTime = Date.now();
+
+  state.lastMode = mode;
+
+  await sendCommand("MODE:" + mode);
+
+  log("Proximity mode: " + mode);
+
+}
+
+// ==================================================
+// DISTANCE ESTIMATION + RADAR POSITION
+// ==================================================
+
+function updateRadarData(rssi) {
+
+  $("#ui-rssi").textContent =
+    rssi.toFixed(0) + " dBm";
+
+  // Log-distance path loss model
+
+  const distance = Math.pow(
+    10,
+    (TX_POWER - rssi) / (10 * PATH_LOSS)
+  );
+
+  $("#ui-dist").textContent =
+    distance < 0.5
+      ? "<0.5 m"
+      : distance.toFixed(1) + " m";
+
+  // RSSI normalization
+
+  const norm = Math.max(
+    0,
+    Math.min(
+      1,
+      (rssi + 90) / 50
+    )
+  );
+
+  targetRadius = 1 - norm;
+
+  targetRadius = Math.max(
+    0.1,
+    targetRadius
+  );
+
+}
+
+// ==================================================
+// RADAR CANVAS
+// ==================================================
+
+const canvas = $("#radarCanvas");
+
+const ctx = canvas.getContext("2d");
+
+let sweepAngle = 0;
+
+function resizeCanvas() {
+
+  const container =
+    $(".radar-container");
+
+  const size = Math.min(
+    container.clientWidth,
+    container.clientHeight
+  ) * 0.9;
+
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.width = Math.round(size * dpr);
+
+  canvas.height = Math.round(size * dpr);
+
+  canvas.style.width = size + "px";
+
+  canvas.style.height = size + "px";
+
+  // Prevent cumulative scaling on resize
+
+  ctx.setTransform(
+    dpr,
+    0,
+    0,
+    dpr,
+    0,
+    0
+  );
+
+}
+
+window.addEventListener(
+  "resize",
+  resizeCanvas
+);
+
+// ==================================================
+// DRAW RADAR
+// ==================================================
+
+function drawRadar() {
+
+  const dpr = window.devicePixelRatio || 1;
+
+  const width = canvas.width / dpr;
+
+  const height = canvas.height / dpr;
+
+  const cx = width / 2;
+
+  const cy = height / 2;
+
+  const maxR = Math.min(width, height) / 2;
+
+  ctx.clearRect(
+    0,
+    0,
+    width,
+    height
+  );
+
+  // Radar rings
+
+  ctx.strokeStyle =
+    "rgba(0,255,65,0.25)";
+
+  ctx.lineWidth = 1;
+
+  for (let i = 1; i <= 4; i++) {
+
+    ctx.beginPath();
+
+    ctx.arc(
+      cx,
+      cy,
+      maxR * (i / 4),
+      0,
+      Math.PI * 2
+    );
+
+    ctx.stroke();
+
+  }
+
+  // Cross lines
+
+  ctx.beginPath();
+
+  ctx.moveTo(cx, 0);
+
+  ctx.lineTo(cx, height);
+
+  ctx.moveTo(0, cy);
+
+  ctx.lineTo(width, cy);
+
+  ctx.stroke();
+
+  // Sweep animation
+
+  sweepAngle += 0.035;
+
+  if (sweepAngle > Math.PI * 2) {
+    sweepAngle = 0;
+  }
+
+  const gradient =
+    ctx.createConicGradient(
+      sweepAngle,
+      cx,
+      cy
+    );
+
+  gradient.addColorStop(
+    0,
+    "rgba(0,255,65,0.35)"
+  );
+
+  gradient.addColorStop(
+    0.15,
+    "rgba(0,255,65,0)"
+  );
+
+  gradient.addColorStop(
+    1,
+    "rgba(0,255,65,0)"
+  );
+
+  ctx.beginPath();
+
+  ctx.moveTo(cx, cy);
+
+  ctx.arc(
+    cx,
+    cy,
+    maxR,
+    0,
+    Math.PI * 2
+  );
+
+  ctx.fillStyle = gradient;
+
+  ctx.fill();
+
+  // Smooth marker movement
+
+  currentRadius +=
+    (targetRadius - currentRadius) * 0.12;
+
+  if (smoothedRssi !== -99 && !state.lostHandled) {
+
+    const targetX =
+      cx +
+      Math.cos(targetAngle) *
+      maxR *
+      currentRadius;
+
+    const targetY =
+      cy +
+      Math.sin(targetAngle) *
+      maxR *
+      currentRadius;
+
+    // Outer glow
+
+    ctx.beginPath();
+
+    ctx.arc(
+      targetX,
+      targetY,
+      12,
+      0,
+      Math.PI * 2
+    );
+
+    ctx.fillStyle =
+      "rgba(0,255,65,0.15)";
+
+    ctx.fill();
+
+    // Target point
+
+    ctx.beginPath();
+
+    ctx.arc(
+      targetX,
+      targetY,
+      5,
+      0,
+      Math.PI * 2
+    );
+
+    ctx.fillStyle = "#00ff41";
+
+    ctx.shadowColor = "#00ff41";
+
+    ctx.shadowBlur = 12;
+
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+
+  }
+
+  checkTagTimeout();
+
+  requestAnimationFrame(drawRadar);
+
+}
+
+// ==================================================
+// BUTTON EVENTS
+// ==================================================
+
+$("#btn-connect").addEventListener(
+  "click",
+  connect
+);
+
+$("#btn-scan").addEventListener(
+  "click",
+  toggleScan
+);
+
+$("#btn-beep").addEventListener(
+  "click",
+  manualBeep
+);
+
+$("#btn-find").addEventListener(
+  "click",
+  toggleFind
+);
+
+// ==================================================
+// INITIALIZATION
+// ==================================================
+
+resizeCanvas();
+
+requestAnimationFrame(drawRadar);
+
+log("BLE Radar initialized");
+
+console.log("Web Bluetooth:", !!navigator.bluetooth);
+
+console.log(
+  "Advertisement scanning:",
+  !!navigator.bluetooth?.requestLEScan
+);
+
+</script>
+
+</body>
+</html>
